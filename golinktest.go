@@ -10,7 +10,7 @@ import (
 	"os"
 )
 
-func append_file(output *os.File, input *os.File, limit int64) error {
+func appendFile(output *os.File, input *os.File, limit int64) error {
 	bytes := make([]byte, 1024)
 	for {
 		n, err := input.Read(bytes)
@@ -39,11 +39,14 @@ func create(program_filename string, data_filename string, output_filename strin
 		fmt.Println(err)
 		return 1
 	}
+	defer program.Close()
+
 	data, err := os.Open(data_filename)
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
+	defer data.Close()
 
 	// create output file
 	output, err := os.Create(output_filename)
@@ -51,16 +54,21 @@ func create(program_filename string, data_filename string, output_filename strin
 		fmt.Println(err)
 		return 1
 	}
+	defer output.Close()
 
 	// copy program file to output
-	err = append_file(output, program, math.MaxInt64)
+	err = appendFile(output, program, math.MaxInt64)
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
 
 	// append data to output
-	append_file(output, data, math.MaxInt64)
+	appendFile(output, data, math.MaxInt64)
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
 
 	// append size of data to the output
 	fi, err := data.Stat()
@@ -70,7 +78,11 @@ func create(program_filename string, data_filename string, output_filename strin
 	}
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, uint64(fi.Size()))
-	output.Write(b)
+	_, err = output.Write(b)
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
 
 	fmt.Printf("data file %v with size %v appended to program file and written to %v\n", data_filename, fi.Size(), output_filename)
 
@@ -84,6 +96,7 @@ func extract(program_filename string, data_filename string) int {
 		fmt.Println(err)
 		return 1
 	}
+	defer program.Close()
 
 	// create output file
 	output, err := os.Create(data_filename)
@@ -91,6 +104,7 @@ func extract(program_filename string, data_filename string) int {
 		fmt.Println(err)
 		return 1
 	}
+	defer output.Close()
 
 	// read size of data from the end of the file
 	program.Seek(-8, 2)
@@ -104,7 +118,11 @@ func extract(program_filename string, data_filename string) int {
 
 	// go to start of data and copy it to the output
 	program.Seek(int64(-(size + 8)), 2)
-	append_file(output, program, int64(size))
+	appendFile(output, program, int64(size))
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
 
 	fmt.Printf("data file %v with size %v extracted\n", data_filename, size)
 
@@ -118,6 +136,7 @@ func random(output_filename string, size uint64) int {
 		fmt.Println(err)
 		return 1
 	}
+	defer output.Close()
 
 	// write random bytes
 	bytes := make([]byte, 1024)

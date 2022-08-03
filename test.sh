@@ -1,8 +1,11 @@
 #!/bin/bash
 
-# create a 1 GB test file with random data
+# build the program
+go build golinktest.go
+
+# create a 1 MB test file with random data
 TESTDATA=testdata.bin
-./golinktest --action=random --output=$TESTDATA --size=1_000_000_000
+./golinktest --action=random --output=$TESTDATA --size=1_000_000
 
 # compile the Go file
 go build golinktest.go
@@ -17,4 +20,8 @@ TESTDATA2=testdata2.bin
 ./$OUTPUT --action=extract --output=$TESTDATA2
 
 # compare the result
-cmp $TESTDATA $TESTDATA2
+if cmp $TESTDATA $TESTDATA2 ; then
+    echo -e "\033[0;32mtest successful\033[m"
+else
+    echo -e "\033[0;31mtest failed\033[m"
+fi
