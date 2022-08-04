@@ -2,207 +2,176 @@ package main
 
 import (
 	"encoding/binary"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
-	"math"
-	"math/rand"
 	"os"
 )
 
-func appendFile(output *os.File, input *os.File, limit int64) error {
-	bytes := make([]byte, 1024)
-	for {
-		n, err := input.Read(bytes)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		if int64(n) > limit {
-			n = int(limit)
-		}
-		limit -= int64(n)
-		_, err = output.Write(bytes[0:n])
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+const (
+	magic = 0x56bb4200ff847612
+)
+
+type Info struct {
+	Size  uint64
+	Magic uint64
 }
 
-func create(program_filename string, data_filename string, output_filename string) int {
+func readInfo(input *os.File) (Info, error) {
+	i := Info{}
+	input.Seek(-int64(binary.Size(i)), io.SeekEnd)
+	err := binary.Read(input, binary.LittleEndian, &i)
+	if err != nil {
+		return i, err
+	}
+	return i, nil
+}
+
+func hasInfo() (bool, error) {
+	program, err := os.Open(os.Args[0])
+	if err != nil {
+		return false, err
+	}
+	defer program.Close()
+	i, err := readInfo(program)
+	if err != nil {
+		return false, err
+	}
+	return i.Magic == magic, nil
+}
+
+func create(program_filename string, data_filename string, output_filename string) error {
 	// open input files
 	program, err := os.Open(program_filename)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 	defer program.Close()
 
 	data, err := os.Open(data_filename)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 	defer data.Close()
 
 	// create output file
 	output, err := os.Create(output_filename)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 	defer output.Close()
 
 	// copy program file to output
-	err = appendFile(output, program, math.MaxInt64)
+	_, err = io.Copy(output, program)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 
 	// append data to output
-	appendFile(output, data, math.MaxInt64)
+	_, err = io.Copy(output, data)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 
-	// append size of data to the output
+	// append size of data and magic ID to the output
 	fi, err := data.Stat()
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
-	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, uint64(fi.Size()))
-	_, err = output.Write(b)
+	i := Info{Size: uint64(fi.Size()), Magic: magic}
+	err = binary.Write(output, binary.LittleEndian, i)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 
 	fmt.Printf("data file %v with size %v appended to program file and written to %v\n", data_filename, fi.Size(), output_filename)
 
-	return 0
+	return nil
 }
 
-func extract(program_filename string, data_filename string) int {
+func extract(program_filename string, data_filename string) error {
 	// open program file
 	program, err := os.Open(program_filename)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 	defer program.Close()
 
 	// create output file
 	output, err := os.Create(data_filename)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 	defer output.Close()
 
 	// read size of data from the end of the file
-	program.Seek(-8, 2)
-	size_bytes := make([]byte, 8)
-	_, err = program.Read(size_bytes)
+	i, err := readInfo(program)
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
-	size := binary.LittleEndian.Uint64(size_bytes)
+	if i.Magic != magic {
+		return errors.New("no added data detected")
+	}
 
 	// go to start of data and copy it to the output
-	program.Seek(int64(-(size + 8)), 2)
-	appendFile(output, program, int64(size))
+	program.Seek(int64(-(i.Size + uint64(binary.Size(i)))), io.SeekEnd)
+	io.CopyN(output, program, int64(i.Size))
 	if err != nil {
-		fmt.Println(err)
-		return 1
+		return err
 	}
 
-	fmt.Printf("data file %v with size %v extracted\n", data_filename, size)
+	fmt.Printf("data file %v with size %v extracted\n", data_filename, i.Size)
 
-	return 0
+	return nil
 }
 
-func random(output_filename string, size uint64) int {
-	// create output file
-	output, err := os.Create(output_filename)
-	if err != nil {
-		fmt.Println(err)
-		return 1
+func usage(hasInfo bool) {
+	if hasInfo {
+		fmt.Printf("usage: %v datafile\n", os.Args[0])
+		fmt.Printf("extracts the linked data\n")
+		os.Exit(2)
+	} else {
+		fmt.Printf("usage: %v datafile outputfile\n", os.Args[0])
+		fmt.Printf("links the data from 'datafile' to the program and creates a new executable named 'outputfile'\n")
+		os.Exit(2)
 	}
-	defer output.Close()
-
-	// write random bytes
-	bytes := make([]byte, 1024)
-	for {
-		n := len(bytes)
-		if uint64(n) > size {
-			n = int(size)
-		}
-		for i := 0; i < n; i++ {
-			bytes[i] = byte(rand.Uint32())
-		}
-		_, err = output.Write(bytes[0:n])
-		if err != nil {
-			fmt.Println(err)
-			return 1
-		}
-		size -= uint64(n)
-		if size == 0 {
-			break
-		}
-	}
-
-	fmt.Printf("random file %v with size %v created\n", output_filename, size)
-
-	return 0
 }
 
 func main() {
-	if len(os.Args) > 1 {
-		action := flag.String("action", "", "Action to make: {create|extract|random}.")
-		data_filename := flag.String("data", "", "Filename of the data for the create action.")
-		output_filename := flag.String("output", "", "The output executable or data, for the create, extract, or random command.")
-		random_size := flag.Uint64("size", 0, "The size of the random output file for the random command.")
-		flag.Parse()
-		if *action == "" {
-			goto Usage
+	hasInfo, err := hasInfo()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	if hasInfo {
+		// extract linked data
+		if len(os.Args) != 2 {
+			usage(hasInfo)
 		}
-		fmt.Printf("action: %v\n", *action)
-		switch *action {
-		case "create":
-			if *data_filename == "" || *output_filename == "" {
-				goto Usage
-			}
-			os.Exit(create(os.Args[0], *data_filename, *output_filename))
-		case "extract":
-			if *output_filename == "" {
-				goto Usage
-			}
-			os.Exit(extract(os.Args[0], *output_filename))
-		case "random":
-			fmt.Printf("size: %v bytes\n", *random_size)
-			if *random_size == 0 {
-				goto Usage
-			}
-			os.Exit(random(*output_filename, *random_size))
+		dataFilename := os.Args[1]
+		if dataFilename == "" {
+			usage(hasInfo)
+		}
+		err := extract(os.Args[0], dataFilename)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
 		}
 	} else {
-		goto Usage
+		// link data
+		if len(os.Args) != 3 {
+			usage(hasInfo)
+		}
+		dataFilename := os.Args[1]
+		outputFilename := os.Args[2]
+		if dataFilename == "" || outputFilename == "" {
+			usage(hasInfo)
+		}
+		err := create(os.Args[0], dataFilename, outputFilename)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
 	}
-
-Usage:
-	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-
-	flag.PrintDefaults()
-	goto Error
-
-Error:
-	os.Exit(2)
+	os.Exit(0)
 }
